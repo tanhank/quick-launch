@@ -7,6 +7,8 @@ Built with Python 3, GTK 3, and Gio.
 import sys
 import os
 import signal
+import fcntl
+import time
 import json
 import math
 import subprocess
@@ -16,9 +18,9 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("Gio", "2.0")
-from gi.repository import Gtk, Gdk, Gio, GLib
+from gi.repository import Gtk, Gdk, Gio, GLib, GLibUnix
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 CACHE_DIR = os.path.expanduser("~/.cache/quick-launch")
 HISTORY_FILE = os.path.join(CACHE_DIR, "history.json")
 
@@ -531,29 +533,69 @@ def main():
         print(f"quick-launch version {VERSION}")
         return
 
-    pid_file = os.path.expanduser("~/.cache/quick-launch.pid")
-    os.makedirs(os.path.dirname(pid_file), exist_ok=True)
-    if os.path.exists(pid_file):
+    # Single-instance lock and Spotlight toggle mechanism
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    if not os.path.isdir(runtime_dir):
+        runtime_dir = os.path.expanduser("~/.cache/quick-launch")
+    os.makedirs(runtime_dir, exist_ok=True)
+
+    lock_file = os.path.join(runtime_dir, "quick-launch.lock")
+    try:
+        lock_fd = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as e:
+        print(f"Error opening lock file: {e}", file=sys.stderr)
+        lock_fd = None
+
+    if lock_fd is not None:
         try:
-            with open(pid_file, "r") as f:
-                old_pid = int(f.read().strip())
-            os.kill(old_pid, 0)
-            os.kill(old_pid, signal.SIGTERM)
-            os.remove(pid_file)
+            # Try non-blocking exclusive flock
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Acquired lock! Write PID for toggling
+            os.ftruncate(lock_fd, 0)
+            os.lseek(lock_fd, 0, os.SEEK_SET)
+            os.write(lock_fd, f"{os.getpid()}\n".encode())
+        except (BlockingIOError, OSError):
+            # Another instance is already active -> Toggle it OFF (macOS Spotlight behavior)
+            for _ in range(5):
+                os.lseek(lock_fd, 0, os.SEEK_SET)
+                content = os.read(lock_fd, 64).decode().strip()
+                if content:
+                    break
+                time.sleep(0.01)
+            if content:
+                try:
+                    active_pid = int(content)
+                    if active_pid != os.getpid():
+                        os.kill(active_pid, signal.SIGTERM)
+                except Exception:
+                    pass
+            os.close(lock_fd)
             return
-        except (ProcessLookupError, ValueError):
-            pass
-        except PermissionError:
-            pass
 
-    with open(pid_file, "w") as f:
-        f.write(str(os.getpid()))
+    try:
+        win = AppLauncher()
 
-    win = AppLauncher()
-    win.connect("destroy", lambda w: (os.remove(pid_file) if os.path.exists(pid_file) else None, Gtk.main_quit()))
-    win.show_all()
-    win.present()
-    Gtk.main()
+        # Connect native GLib Unix signal handlers for instant termination on Super toggle
+        def on_sigterm(*_):
+            win.destroy()
+            return GLib.SOURCE_REMOVE
+
+        GLibUnix.signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, on_sigterm)
+        GLibUnix.signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, on_sigterm)
+
+        win.connect("destroy", Gtk.main_quit)
+        win.show_all()
+        win.present()
+        Gtk.main()
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+                if os.path.exists(lock_file):
+                    os.remove(lock_file)
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     main()

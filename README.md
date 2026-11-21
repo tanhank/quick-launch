@@ -17,6 +17,7 @@ A premium, macOS Spotlight & Raycast inspired application launcher for Linux des
   - `↵ Enter`: Launch selected app / copy calculation / run command
   - `↑` / `↓` or `Ctrl+P` / `Ctrl+N`: Navigate results
   - `Esc`: Clear search input or close launcher
+- **Spotlight Single-Instance Toggle**: Pressing your shortcut (`Super` or `Super+Space`) opens Quick Launch; pressing it while already active cleanly toggles it closed, preventing duplicate windows.
 - **Zero Daemon Overhead**: Only runs on-demand when summoned; zero memory footprint when closed.
 
 ## Quick Install
