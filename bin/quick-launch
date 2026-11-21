@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-Quick Launch - A lightweight, responsive Spotlight/Windows-style application launcher for Linux.
-Built with Python 3 and GTK 3.
+Quick Launch - macOS Spotlight-style Application Launcher for Linux
+Built with Python 3, GTK 3, and Gio.
 """
 
 import sys
 import os
 import signal
+import json
+import math
+import subprocess
+import urllib.parse
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -14,32 +18,50 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Gio", "2.0")
 from gi.repository import Gtk, Gdk, Gio, GLib
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+CACHE_DIR = os.path.expanduser("~/.cache/quick-launch")
+HISTORY_FILE = os.path.join(CACHE_DIR, "history.json")
 
+# Premium Frosted Dark Acrylic Theme (macOS Spotlight / Raycast aesthetic)
 CSS = b"""
 window {
-    background-color: #232328;
-    border: 1px solid #4a4a58;
-    border-radius: 12px;
+    background-color: rgba(28, 29, 36, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 16px;
+    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.65);
+}
+
+.search-box {
+    padding: 12px 16px 10px 16px;
+    background-color: transparent;
 }
 
 entry {
-    background-color: #2e2e38;
+    background-color: rgba(255, 255, 255, 0.07);
     color: #ffffff;
-    font-size: 15px;
-    padding: 10px 14px;
-    border: 1px solid #505064;
-    border-radius: 8px;
-    margin: 12px 14px 6px 14px;
+    font-size: 18px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 12px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 10px;
+    caret-color: #0a84ff;
+    box-shadow: none;
 }
 
 entry:focus {
-    border-color: #3584e4;
+    border-color: #0a84ff;
+    background-color: rgba(255, 255, 255, 0.10);
+}
+
+.divider {
+    background-color: rgba(255, 255, 255, 0.08);
+    min-height: 1px;
 }
 
 scrolledwindow {
     border: none;
-    margin: 4px 6px 8px 6px;
+    background-color: transparent;
+    padding: 4px 8px;
 }
 
 list {
@@ -47,58 +69,161 @@ list {
 }
 
 row {
-    padding: 6px 10px;
-    border-radius: 6px;
+    padding: 8px 12px;
+    border-radius: 8px;
     margin: 2px 4px;
     background-color: transparent;
+    transition: background-color 80ms ease-in-out;
 }
 
 row:selected {
-    background-color: #3584e4;
+    background-color: #0a84ff;
 }
 
 row:hover:not(:selected) {
-    background-color: #32323e;
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+.badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background-color: rgba(255, 255, 255, 0.10);
+    color: #b0b0c4;
+}
+
+row:selected .badge {
+    background-color: rgba(255, 255, 255, 0.22);
+    color: #ffffff;
+}
+
+.footer {
+    padding: 8px 16px;
+    background-color: rgba(0, 0, 0, 0.18);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 0 0 16px 16px;
+}
+
+.hint-text {
+    font-size: 11px;
+    color: #7a7a8c;
+}
+
+.hint-key {
+    font-size: 11px;
+    font-weight: bold;
+    color: #a0a0b4;
 }
 """
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def record_launch(app_id):
+    history = load_history()
+    history[app_id] = history.get(app_id, 0) + 1
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    try:
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history, f, indent=2)
+    except Exception:
+        pass
+
+def try_eval_math(expr):
+    """Safely evaluates math expressions if input looks like a calculation."""
+    expr = expr.strip()
+    if not expr or len(expr) < 2:
+        return None
+    # Check if string contains math characters
+    math_chars = set("0123456789+-*/%^()., ")
+    if not any(c in expr for c in "+-*/%^"):
+        if not any(expr.startswith(f) for f in ("sqrt", "sin", "cos", "tan", "log", "abs")):
+            return None
+
+    # Replace power syntax
+    clean_expr = expr.replace("^", "**")
+    # Allowed names in safe namespace
+    safe_dict = {
+        "sqrt": math.sqrt, "sin": math.sin, "cos": math.cos, "tan": math.tan,
+        "log": math.log, "log10": math.log10, "exp": math.exp,
+        "pi": math.pi, "e": math.e, "abs": abs, "round": round
+    }
+    try:
+        # Compile and check AST restrictions
+        code = compile(clean_expr, "<string>", "eval")
+        for name in code.co_names:
+            if name not in safe_dict:
+                return None
+        res = eval(code, {"__builtins__": None}, safe_dict)
+        if isinstance(res, (int, float)):
+            if isinstance(res, float) and res.is_integer():
+                res = int(res)
+            return f"{res:,}" if isinstance(res, int) else f"{res:.6g}"
+    except Exception:
+        return None
+    return None
 
 class AppLauncher(Gtk.Window):
     def __init__(self):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.set_title("Quick Launch")
         self.set_decorated(False)
-        self.set_default_size(560, 440)
+        self.set_default_size(620, 460)
         self.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
         self.set_skip_taskbar_hint(True)
         self.set_skip_pager_hint(True)
         self.set_keep_above(True)
 
-        # Apply custom styling
+        # Enable RGBA for frosted glass translucency
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual and screen.is_composited():
+            self.set_visual(visual)
+        self.set_app_paintable(True)
+
+        # Apply CSS styling
         style_provider = Gtk.CssProvider()
         style_provider.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_screen(
-            Gdk.Screen.get_default(),
+            screen,
             style_provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
 
-        # Load installed applications
+        # Load apps and history
+        self.history = load_history()
         self.apps = self.load_applications()
 
-        # Layout
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        # Main Layout Box
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add(vbox)
 
-        # Search Entry
+        # Search Entry Container
+        search_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        search_box.get_style_context().add_class("search-box")
+        vbox.pack_start(search_box, False, False, 0)
+
         self.entry = Gtk.Entry()
-        self.entry.set_placeholder_text("Type to search applications...")
+        self.entry.set_placeholder_text("Spotlight Search (apps, math, or '> command')...")
         self.entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "system-search-symbolic")
         self.entry.connect("changed", self.on_search_changed)
         self.entry.connect("activate", self.on_entry_activate)
         self.entry.connect("key-press-event", self.on_entry_key_press)
-        vbox.pack_start(self.entry, False, False, 0)
+        search_box.pack_start(self.entry, False, False, 0)
 
-        # Scrolled Results
+        # Divider line
+        divider = Gtk.Box()
+        divider.get_style_context().add_class("divider")
+        vbox.pack_start(divider, False, False, 0)
+
+        # Scrolled Results View
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         vbox.pack_start(scrolled, True, True, 0)
@@ -108,12 +233,30 @@ class AppLauncher(Gtk.Window):
         self.listbox.connect("row-activated", self.on_row_activated)
         scrolled.add(self.listbox)
 
-        # Window events
+        # Bottom Hints Footer
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        footer.get_style_context().add_class("footer")
+        vbox.pack_start(footer, False, False, 0)
+
+        self.lbl_count = Gtk.Label(xalign=0)
+        self.lbl_count.set_markup("<span size='9000' foreground='#7a7a8c'>Ready</span>")
+        footer.pack_start(self.lbl_count, False, False, 0)
+
+        # Right-aligned keyboard hints
+        footer_hints = Gtk.Label(xalign=1)
+        footer_hints.set_markup(
+            "<span weight='bold' size='9000' foreground='#a0a0b4'>↵</span> <span size='9000' foreground='#7a7a8c'>Open  ·  </span>"
+            "<span weight='bold' size='9000' foreground='#a0a0b4'>↑↓</span> <span size='9000' foreground='#7a7a8c'>Navigate  ·  </span>"
+            "<span weight='bold' size='9000' foreground='#a0a0b4'>esc</span> <span size='9000' foreground='#7a7a8c'>Close</span>"
+        )
+        footer.pack_end(footer_hints, False, False, 0)
+
+        # Window event listeners
         self.connect("key-press-event", self.on_window_key_press)
         self.connect("focus-out-event", lambda w, e: self.destroy())
 
-        # Populate initial results
-        self.filtered_apps = []
+        # Render initial view
+        self.filtered_items = []
         self.update_results("")
 
     def load_applications(self):
@@ -133,73 +276,158 @@ class AppLauncher(Gtk.Window):
             desc = app.get_description() or ""
             keywords = app.get_keywords() if hasattr(app, "get_keywords") else []
             keywords = keywords or []
+            categories = app.get_categories() if hasattr(app, "get_categories") else ""
+
+            # Classify category badge
+            badge = "App"
+            if categories:
+                cat_lower = categories.lower()
+                if "development" in cat_lower or "programming" in cat_lower:
+                    badge = "Dev"
+                elif "system" in cat_lower or "settings" in cat_lower:
+                    badge = "System"
+                elif "network" in cat_lower or "web" in cat_lower:
+                    badge = "Internet"
+                elif "utility" in cat_lower:
+                    badge = "Utility"
+                elif "audio" in cat_lower or "video" in cat_lower or "media" in cat_lower:
+                    badge = "Media"
+                elif "office" in cat_lower:
+                    badge = "Office"
 
             search_text = f"{name} {generic} {desc} {' '.join(keywords)} {app.get_executable() or ''}".lower()
+            launch_count = self.history.get(app_id, 0)
+
             apps.append({
+                "type": "app",
                 "app": app,
+                "id": app_id,
                 "name": name,
                 "generic": generic,
-                "desc": generic if generic else (desc[:60] + "..." if len(desc) > 60 else desc),
+                "desc": generic if generic else (desc[:65] + "..." if len(desc) > 65 else desc),
+                "badge": badge,
                 "icon": app.get_icon(),
                 "search_text": search_text,
+                "launches": launch_count,
             })
-        apps.sort(key=lambda x: x["name"].lower())
         return apps
 
     def update_results(self, query):
         for child in self.listbox.get_children():
             self.listbox.remove(child)
 
-        q = query.strip().lower()
-        if not q:
-            matches = self.apps[:20]
+        q = query.strip()
+        items = []
+
+        # 1. Math Calculation Check
+        math_res = try_eval_math(q) if q else None
+        if math_res is not None:
+            items.append({
+                "type": "math",
+                "name": f"= {math_res}",
+                "desc": "Press Enter to copy result to clipboard",
+                "badge": "Math",
+                "result": math_res,
+                "icon_name": "accessories-calculator",
+            })
+
+        # 2. Terminal Command Runner (if starts with '>' or '!')
+        if q.startswith(">") or q.startswith("!"):
+            cmd = q[1:].strip()
+            if cmd:
+                items.append({
+                    "type": "terminal",
+                    "name": f"Run in Terminal: {cmd}",
+                    "desc": "Execute in MATE Terminal",
+                    "badge": "Terminal",
+                    "command": cmd,
+                    "icon_name": "utilities-terminal",
+                })
+
+        # 3. Application Search
+        q_lower = q.lower()
+        if not q_lower:
+            # Show top used apps first, then alphabetical
+            sorted_apps = sorted(self.apps, key=lambda x: (-x["launches"], x["name"].lower()))
+            items.extend(sorted_apps[:25])
         else:
             scored = []
-            for item in self.apps:
-                name_lower = item["name"].lower()
-                if name_lower.startswith(q):
-                    scored.append((0, item))
-                elif q in name_lower:
-                    scored.append((1, item))
-                elif q in item["search_text"]:
-                    scored.append((2, item))
-            scored.sort(key=lambda x: (x[0], x[1]["name"].lower()))
-            matches = [item for _, item in scored[:25]]
+            for app in self.apps:
+                name_l = app["name"].lower()
+                exec_l = (app["app"].get_executable() or "").lower()
+                if name_l.startswith(q_lower):
+                    scored.append((0, -app["launches"], app))
+                elif q_lower in name_l:
+                    scored.append((1, -app["launches"], app))
+                elif exec_l.startswith(q_lower):
+                    scored.append((2, -app["launches"], app))
+                elif q_lower in app["search_text"]:
+                    scored.append((3, -app["launches"], app))
+            scored.sort(key=lambda x: (x[0], x[1], x[2]["name"].lower()))
+            items.extend([x[2] for x in scored[:25]])
 
-        self.filtered_apps = matches
+        # 4. Web Search Fallback
+        if q and not math_res and not (q.startswith(">") or q.startswith("!")):
+            items.append({
+                "type": "web",
+                "name": f"Search Google for \"{q}\"",
+                "desc": "Open search in default web browser",
+                "badge": "Web Search",
+                "query": q,
+                "icon_name": "web-browser",
+            })
 
-        for item in matches:
+        self.filtered_items = items
+
+        # Build UI Rows
+        for item in items:
             row = Gtk.ListBoxRow()
-            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
             row.add(hbox)
 
             # Icon
-            icon = item["icon"]
-            if icon:
-                img = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.DND)
+            if "icon" in item and item["icon"]:
+                img = Gtk.Image.new_from_gicon(item["icon"], Gtk.IconSize.DND)
             else:
-                img = Gtk.Image.new_from_icon_name("application-x-executable", Gtk.IconSize.DND)
-            img.set_pixel_size(32)
+                icon_name = item.get("icon_name", "application-x-executable")
+                img = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.DND)
+            img.set_pixel_size(36)
             hbox.pack_start(img, False, False, 0)
 
-            # Text box
+            # Titles Container
             v_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             lbl_name = Gtk.Label(xalign=0)
             esc_name = GLib.markup_escape_text(item["name"])
-            lbl_name.set_markup(f"<span weight='bold' size='11000' foreground='#ffffff'>{esc_name}</span>")
+            lbl_name.set_markup(f"<span weight='600' size='11500' foreground='#ffffff'>{esc_name}</span>")
             v_text.pack_start(lbl_name, False, False, 0)
 
-            if item["desc"]:
+            if item.get("desc"):
                 lbl_desc = Gtk.Label(xalign=0)
                 esc_desc = GLib.markup_escape_text(item["desc"])
-                lbl_desc.set_markup(f"<span size='9500' foreground='#a4a4b8'>{esc_desc}</span>")
+                lbl_desc.set_markup(f"<span size='9500' foreground='#9fa0b2'>{esc_desc}</span>")
                 v_text.pack_start(lbl_desc, False, False, 0)
 
             hbox.pack_start(v_text, True, True, 0)
+
+            # Category / Badge
+            badge_text = item.get("badge", "")
+            if badge_text:
+                lbl_badge = Gtk.Label(xalign=1)
+                lbl_badge.get_style_context().add_class("badge")
+                lbl_badge.set_text(badge_text)
+                hbox.pack_end(lbl_badge, False, False, 4)
+
             self.listbox.add(row)
 
         self.listbox.show_all()
 
+        # Update footer count
+        if not q:
+            self.lbl_count.set_markup(f"<span size='9000' foreground='#7a7a8c'>{len(self.apps)} applications available</span>")
+        else:
+            self.lbl_count.set_markup(f"<span size='9000' foreground='#7a7a8c'>{len(items)} results</span>")
+
+        # Auto select first row
         first_row = self.listbox.get_row_at_index(0)
         if first_row:
             self.listbox.select_row(first_row)
@@ -214,33 +442,70 @@ class AppLauncher(Gtk.Window):
 
     def on_entry_key_press(self, widget, event):
         keyval = event.keyval
-        if keyval in (Gdk.KEY_Down, Gdk.KEY_Up):
+        # Support Down / Up and Ctrl+n / Ctrl+p
+        state = event.state
+        ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+
+        if keyval == Gdk.KEY_Down or (ctrl and keyval == Gdk.KEY_n):
             row = self.listbox.get_selected_row()
             idx = row.get_index() if row else 0
-            if keyval == Gdk.KEY_Down:
-                next_row = self.listbox.get_row_at_index(idx + 1)
-            else:
-                next_row = self.listbox.get_row_at_index(max(0, idx - 1))
+            next_row = self.listbox.get_row_at_index(idx + 1)
             if next_row:
                 self.listbox.select_row(next_row)
                 self.listbox.scroll_to_row(next_row)
+            return True
+        elif keyval == Gdk.KEY_Up or (ctrl and keyval == Gdk.KEY_p):
+            row = self.listbox.get_selected_row()
+            idx = row.get_index() if row else 0
+            prev_row = self.listbox.get_row_at_index(max(0, idx - 1))
+            if prev_row:
+                self.listbox.select_row(prev_row)
+                self.listbox.scroll_to_row(prev_row)
             return True
         return False
 
     def on_window_key_press(self, widget, event):
         if event.keyval == Gdk.KEY_Escape:
-            self.destroy()
+            text = self.entry.get_text()
+            if text:
+                self.entry.set_text("")
+            else:
+                self.destroy()
             return True
         return False
 
     def on_row_activated(self, listbox, row):
         idx = row.get_index()
-        if 0 <= idx < len(self.filtered_apps):
-            app = self.filtered_apps[idx]["app"]
-            try:
-                app.launch([], None)
-            except Exception as e:
-                print(f"Error launching {app.get_name()}: {e}", file=sys.stderr)
+        if 0 <= idx < len(self.filtered_items):
+            item = self.filtered_items[idx]
+            item_type = item.get("type", "app")
+
+            if item_type == "app":
+                app = item["app"]
+                record_launch(item["id"])
+                try:
+                    app.launch([], None)
+                except Exception as e:
+                    print(f"Error launching {app.get_name()}: {e}", file=sys.stderr)
+
+            elif item_type == "math":
+                res = item["result"]
+                clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+                clipboard.set_text(res, -1)
+                clipboard.store()
+
+            elif item_type == "terminal":
+                cmd = item["command"]
+                try:
+                    subprocess.Popen(["mate-terminal", "-e", f"bash -c '{cmd}; exec bash'"])
+                except Exception:
+                    subprocess.Popen(["x-terminal-emulator", "-e", cmd])
+
+            elif item_type == "web":
+                query = urllib.parse.quote_plus(item["query"])
+                url = f"https://www.google.com/search?q={query}"
+                Gio.AppInfo.launch_default_for_uri(url, None)
+
         self.destroy()
 
 def main():

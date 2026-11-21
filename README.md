@@ -1,18 +1,25 @@
-# Quick Launch
+# Quick Launch 🚀
 
-A lightweight, keyboard-driven application launcher popup for Linux desktops (MATE, XFCE, and other X11 environments).
+A premium, macOS Spotlight & Raycast inspired application launcher for Linux desktops (MATE, XFCE, and X11 environments).
 
-![Preview](assets/preview.png)
+![Spotlight Preview](assets/preview.png)
 
-## Features
+## Highlights
 
-- **Fast Application Discovery**: Queries installed `.desktop` files using `Gio.AppInfo` in under 20ms.
-- **Real-Time Fuzzy Matching**: Searches names, generic categories, executables, and desktop keywords.
-- **Keyboard Driven**: Immediate input focus, auto-selects top match, arrow key navigation, Enter to launch, and Esc to dismiss.
-- **Single-Instance Toggle**: Repeatedly pressing the hotkey toggles the window open and closed.
-- **Zero Background Daemons**: Runs on-demand without background RAM overhead.
+- **Frosted Acrylic Glass UI**: Modern dark translucent design with rounded corners and subtle drop shadows.
+- **Instant Application Search**: Loads and queries desktop applications via native `Gio.AppInfo` in under 15ms.
+- **Smart Learning & Frequency Scoring**: Tracks app usage (`~/.cache/quick-launch/history.json`) to automatically boost your most-used applications to the top.
+- **Inline Calculator & Math Evaluation**: Type expressions like `1024 * 1024`, `sqrt(144)`, or `24 * 60` for immediate answers. Press Enter to copy the result to your clipboard.
+- **Terminal Runner**: Prefix with `>` or `!` (e.g. `> htop`, `> ping 1.1.1.1`) to execute commands in your terminal.
+- **Web Search Fallback**: Seamlessly search Google for any query directly from the launcher.
+- **Category Badges**: Visual tags identifying utilities, development tools, system preferences, and media apps.
+- **Full Keyboard Navigation**:
+  - `↵ Enter`: Launch selected app / copy calculation / run command
+  - `↑` / `↓` or `Ctrl+P` / `Ctrl+N`: Navigate results
+  - `Esc`: Clear search input or close launcher
+- **Zero Daemon Overhead**: Only runs on-demand when summoned; zero memory footprint when closed.
 
-## Installation
+## Quick Install
 
 ```bash
 git clone https://github.com/tanhank/quick-launch.git
@@ -20,16 +27,16 @@ cd quick-launch
 ./install.sh
 ```
 
-The installer places the executable in `~/.local/bin/quick-launch` and configures the `Super_L` and `<Super>space` shortcuts on MATE.
+The installer places the binary at `~/.local/bin/quick-launch` and automatically configures `Super` and `Super+Space` hotkeys in MATE Desktop.
 
-## Manual Keybinding Configuration
+## Manual Keybindings
 
-If you use another window manager (i3, Openbox, XFCE):
+For i3, Openbox, XFCE, or custom window managers:
 
 - **Command**: `quick-launch`
 - **Recommended Shortcut**: `Super` or `Super+Space`
 
-## Removal
+## Uninstallation
 
 ```bash
 ./uninstall.sh
