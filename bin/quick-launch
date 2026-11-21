@@ -18,102 +18,135 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Gio", "2.0")
 from gi.repository import Gtk, Gdk, Gio, GLib
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 CACHE_DIR = os.path.expanduser("~/.cache/quick-launch")
 HISTORY_FILE = os.path.join(CACHE_DIR, "history.json")
 
-# Premium Frosted Dark Acrylic Theme (macOS Spotlight / Raycast aesthetic)
+# Premium Spotlight Dark Theme
 CSS = b"""
 window {
-    background-color: rgba(28, 29, 36, 0.94);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 16px;
-    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.65);
+    background-color: #1a1b20;
+    border: 1px solid #363844;
+    border-radius: 14px;
 }
 
-.search-box {
-    padding: 12px 16px 10px 16px;
+.search-container {
+    padding: 12px 18px;
     background-color: transparent;
 }
 
+.search-icon {
+    color: #828394;
+    margin-right: 12px;
+}
+
 entry {
-    background-color: rgba(255, 255, 255, 0.07);
+    background: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
     color: #ffffff;
     font-size: 18px;
+    font-weight: 400;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    padding: 12px 16px;
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    border-radius: 10px;
-    caret-color: #0a84ff;
-    box-shadow: none;
+    padding: 4px 2px;
+    caret-color: #0071e3;
 }
 
 entry:focus {
-    border-color: #0a84ff;
-    background-color: rgba(255, 255, 255, 0.10);
+    background: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
 }
 
 .divider {
-    background-color: rgba(255, 255, 255, 0.08);
+    background-color: #282932;
     min-height: 1px;
 }
 
 scrolledwindow {
     border: none;
     background-color: transparent;
-    padding: 4px 8px;
+}
+
+scrollbar {
+    opacity: 0;
 }
 
 list {
     background-color: transparent;
+    padding: 6px 10px;
 }
 
 row {
     padding: 8px 12px;
     border-radius: 8px;
-    margin: 2px 4px;
+    margin: 2px 0;
     background-color: transparent;
-    transition: background-color 80ms ease-in-out;
+    background-image: none;
 }
 
 row:selected {
-    background-color: #0a84ff;
+    background-image: none;
+    background-color: #0071e3;
 }
 
-row:hover:not(:selected) {
-    background-color: rgba(255, 255, 255, 0.06);
-}
-
-.badge {
-    font-size: 10px;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 4px;
-    background-color: rgba(255, 255, 255, 0.10);
-    color: #b0b0c4;
-}
-
-row:selected .badge {
-    background-color: rgba(255, 255, 255, 0.22);
+row:selected .app-title {
     color: #ffffff;
 }
 
+row:selected .app-desc {
+    color: #d6e8ff;
+}
+
+row:selected .badge {
+    background-image: none;
+    background-color: rgba(255, 255, 255, 0.24);
+    color: #ffffff;
+}
+
+row:hover:not(:selected) {
+    background-image: none;
+    background-color: #252630;
+}
+
+.app-title {
+    font-size: 14.5px;
+    font-weight: 600;
+    color: #ffffff;
+}
+
+.app-desc {
+    font-size: 12px;
+    color: #8e90a0;
+}
+
+.badge {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 5px;
+    background-image: none;
+    background-color: #262732;
+    color: #9293a4;
+}
+
 .footer {
-    padding: 8px 16px;
-    background-color: rgba(0, 0, 0, 0.18);
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 0 0 16px 16px;
+    padding: 9px 18px;
+    background-color: #141519;
+    border-top: 1px solid #24252e;
+    border-radius: 0 0 14px 14px;
 }
 
-.hint-text {
+.footer-count {
     font-size: 11px;
-    color: #7a7a8c;
+    color: #686978;
 }
 
-.hint-key {
+.footer-hints {
     font-size: 11px;
-    font-weight: bold;
-    color: #a0a0b4;
+    color: #888998;
 }
 """
 
@@ -141,22 +174,18 @@ def try_eval_math(expr):
     expr = expr.strip()
     if not expr or len(expr) < 2:
         return None
-    # Check if string contains math characters
     math_chars = set("0123456789+-*/%^()., ")
     if not any(c in expr for c in "+-*/%^"):
         if not any(expr.startswith(f) for f in ("sqrt", "sin", "cos", "tan", "log", "abs")):
             return None
 
-    # Replace power syntax
     clean_expr = expr.replace("^", "**")
-    # Allowed names in safe namespace
     safe_dict = {
         "sqrt": math.sqrt, "sin": math.sin, "cos": math.cos, "tan": math.tan,
         "log": math.log, "log10": math.log10, "exp": math.exp,
         "pi": math.pi, "e": math.e, "abs": abs, "round": round
     }
     try:
-        # Compile and check AST restrictions
         code = compile(clean_expr, "<string>", "eval")
         for name in code.co_names:
             if name not in safe_dict:
@@ -175,24 +204,17 @@ class AppLauncher(Gtk.Window):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.set_title("Quick Launch")
         self.set_decorated(False)
-        self.set_default_size(620, 460)
+        self.set_default_size(640, 460)
         self.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
         self.set_skip_taskbar_hint(True)
         self.set_skip_pager_hint(True)
         self.set_keep_above(True)
 
-        # Enable RGBA for frosted glass translucency
-        screen = self.get_screen()
-        visual = screen.get_rgba_visual()
-        if visual and screen.is_composited():
-            self.set_visual(visual)
-        self.set_app_paintable(True)
-
         # Apply CSS styling
         style_provider = Gtk.CssProvider()
         style_provider.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_screen(
-            screen,
+            self.get_screen(),
             style_provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
@@ -205,18 +227,22 @@ class AppLauncher(Gtk.Window):
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add(vbox)
 
-        # Search Entry Container
-        search_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        search_box.get_style_context().add_class("search-box")
+        # Search Bar Container
+        search_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        search_box.get_style_context().add_class("search-container")
         vbox.pack_start(search_box, False, False, 0)
+
+        icon = Gtk.Image.new_from_icon_name("system-search-symbolic", Gtk.IconSize.DND)
+        icon.set_pixel_size(20)
+        icon.get_style_context().add_class("search-icon")
+        search_box.pack_start(icon, False, False, 4)
 
         self.entry = Gtk.Entry()
         self.entry.set_placeholder_text("Spotlight Search (apps, math, or '> command')...")
-        self.entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "system-search-symbolic")
         self.entry.connect("changed", self.on_search_changed)
         self.entry.connect("activate", self.on_entry_activate)
         self.entry.connect("key-press-event", self.on_entry_key_press)
-        search_box.pack_start(self.entry, False, False, 0)
+        search_box.pack_start(self.entry, True, True, 0)
 
         # Divider line
         divider = Gtk.Box()
@@ -226,6 +252,7 @@ class AppLauncher(Gtk.Window):
         # Scrolled Results View
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_overlay_scrolling(True)
         vbox.pack_start(scrolled, True, True, 0)
 
         self.listbox = Gtk.ListBox()
@@ -239,16 +266,12 @@ class AppLauncher(Gtk.Window):
         vbox.pack_start(footer, False, False, 0)
 
         self.lbl_count = Gtk.Label(xalign=0)
-        self.lbl_count.set_markup("<span size='9000' foreground='#7a7a8c'>Ready</span>")
+        self.lbl_count.get_style_context().add_class("footer-count")
         footer.pack_start(self.lbl_count, False, False, 0)
 
-        # Right-aligned keyboard hints
         footer_hints = Gtk.Label(xalign=1)
-        footer_hints.set_markup(
-            "<span weight='bold' size='9000' foreground='#a0a0b4'>↵</span> <span size='9000' foreground='#7a7a8c'>Open  ·  </span>"
-            "<span weight='bold' size='9000' foreground='#a0a0b4'>↑↓</span> <span size='9000' foreground='#7a7a8c'>Navigate  ·  </span>"
-            "<span weight='bold' size='9000' foreground='#a0a0b4'>esc</span> <span size='9000' foreground='#7a7a8c'>Close</span>"
-        )
+        footer_hints.get_style_context().add_class("footer-hints")
+        footer_hints.set_text("↵ Open  ·  ↑↓ Navigate  ·  esc Close")
         footer.pack_end(footer_hints, False, False, 0)
 
         # Window event listeners
@@ -278,7 +301,6 @@ class AppLauncher(Gtk.Window):
             keywords = keywords or []
             categories = app.get_categories() if hasattr(app, "get_categories") else ""
 
-            # Classify category badge
             badge = "App"
             if categories:
                 cat_lower = categories.lower()
@@ -347,7 +369,6 @@ class AppLauncher(Gtk.Window):
         # 3. Application Search
         q_lower = q.lower()
         if not q_lower:
-            # Show top used apps first, then alphabetical
             sorted_apps = sorted(self.apps, key=lambda x: (-x["launches"], x["name"].lower()))
             items.extend(sorted_apps[:25])
         else:
@@ -394,17 +415,17 @@ class AppLauncher(Gtk.Window):
             img.set_pixel_size(36)
             hbox.pack_start(img, False, False, 0)
 
-            # Titles Container
+            # Text Labels
             v_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             lbl_name = Gtk.Label(xalign=0)
-            esc_name = GLib.markup_escape_text(item["name"])
-            lbl_name.set_markup(f"<span weight='600' size='11500' foreground='#ffffff'>{esc_name}</span>")
+            lbl_name.set_text(item["name"])
+            lbl_name.get_style_context().add_class("app-title")
             v_text.pack_start(lbl_name, False, False, 0)
 
             if item.get("desc"):
                 lbl_desc = Gtk.Label(xalign=0)
-                esc_desc = GLib.markup_escape_text(item["desc"])
-                lbl_desc.set_markup(f"<span size='9500' foreground='#9fa0b2'>{esc_desc}</span>")
+                lbl_desc.set_text(item["desc"])
+                lbl_desc.get_style_context().add_class("app-desc")
                 v_text.pack_start(lbl_desc, False, False, 0)
 
             hbox.pack_start(v_text, True, True, 0)
@@ -421,13 +442,11 @@ class AppLauncher(Gtk.Window):
 
         self.listbox.show_all()
 
-        # Update footer count
         if not q:
-            self.lbl_count.set_markup(f"<span size='9000' foreground='#7a7a8c'>{len(self.apps)} applications available</span>")
+            self.lbl_count.set_text(f"{len(self.apps)} applications available")
         else:
-            self.lbl_count.set_markup(f"<span size='9000' foreground='#7a7a8c'>{len(items)} results</span>")
+            self.lbl_count.set_text(f"{len(items)} results")
 
-        # Auto select first row
         first_row = self.listbox.get_row_at_index(0)
         if first_row:
             self.listbox.select_row(first_row)
@@ -442,7 +461,6 @@ class AppLauncher(Gtk.Window):
 
     def on_entry_key_press(self, widget, event):
         keyval = event.keyval
-        # Support Down / Up and Ctrl+n / Ctrl+p
         state = event.state
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
 

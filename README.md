@@ -6,7 +6,7 @@ A premium, macOS Spotlight & Raycast inspired application launcher for Linux des
 
 ## Highlights
 
-- **Frosted Acrylic Glass UI**: Modern dark translucent design with rounded corners and subtle drop shadows.
+- **Premium Spotlight Dark UI**: High-contrast dark canvas (`#1a1b20`), borderless search bar, clean Apple Cupertino blue selection, and hidden scrollbars designed for zero background bleed-through.
 - **Instant Application Search**: Loads and queries desktop applications via native `Gio.AppInfo` in under 15ms.
 - **Smart Learning & Frequency Scoring**: Tracks app usage (`~/.cache/quick-launch/history.json`) to automatically boost your most-used applications to the top.
 - **Inline Calculator & Math Evaluation**: Type expressions like `1024 * 1024`, `sqrt(144)`, or `24 * 60` for immediate answers. Press Enter to copy the result to your clipboard.
